@@ -1,29 +1,31 @@
 import express from 'express';
-import db from '../config/dbControl.js';
 
 const authRouter = express.Router();
 
-// Login route
-authRouter.post('/login', (req, res) => {
+// Login route with role-based authentication
+authRouter.post('/login', async (req, res) => {
   const { email, password } = req.body;
-  console.log(req.body);
-  
-  const query =
-    'SELECT * FROM master m RIGHT JOIN role_and_permission r ON m.role_id = r.role_id WHERE m.emp_email = ? AND m.emp_password = ?';
 
-  db.query(query, [email, password], (err, result) => {
-    if (err) {
-      return res.status(500).json({ message: 'Database error', error: err });
-    }
+  try {
+    const db = global.dbClient.db('hrmDB'); // Access database using global client
+    const collection = db.collection('master'); // Access 'master' collection
+    const roleCollection = db.collection('role_and_permission'); // Access 'role_and_permission' collection
 
-    if (result.length === 0) {
+    // Find the user by email and password
+    const user = await collection.findOne({ emp_email: email, emp_password: password });
+
+    if (!user) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    const user = result[0];
-   
-    
-    // Directly send the user data as a JSON response
+    // Check the role and permissions for the user
+    const role = await roleCollection.findOne({ role_id: user.role_id });
+
+    if (!role) {
+      return res.status(403).json({ message: 'Role not found' });
+    }
+
+    // Send user data along with role and permission
     return res.json({
       isAuthenticated: true,
       emp_id: user.emp_id,
@@ -37,97 +39,69 @@ authRouter.post('/login', (req, res) => {
       emp_join_date: user.emp_join_date,
       emp_status: user.emp_status,
       role_id: user.role_id,
-      role_permission: user.role_permission,
+      role_permission: role.role_permission,  // Corrected to access role permission from the 'role' object
       emp_email: user.emp_email,
       emp_password: user.emp_password,
-      role: user.role,
-      permission: user.permission,
-      total_leave: user.total_leave  // Ensure total_leave is here
+      role: role.role,  // Corrected to access role from the 'role' object
+      permission: role.permission,  // Corrected to access permission from the 'role' object
     });
-  });
-});
-
-
-// Logout route
-authRouter.post('/logout', (req, res) => {
-  req.session.destroy((err) => {
-    if (err) {
-      return res.status(500).json({ message: 'Failed to log out' });
-    }
-    res.clearCookie('isAuthenticated');
-    return res.json({ message: 'Logged out successfully' });
-  });
-});
-
-// Check session route (for front-end validation)
-authRouter.get('/session', (req, res) => {
-  if (req.session.user) {
-    return res.json({
-      isAuthenticated: true,
-      user: req.session.user,
-    });
-  } else {
-    return res.status(401).json({ isAuthenticated: false });
+  } catch (error) {
+    console.error("MongoDB error: ", error.message);
+    return res.status(500).json({ message: 'Database error', error: error.message });
   }
 });
 
 
+//CHANGE PASSWORD 
 
-authRouter.put('/updateUserPassword', (req, res) => {
+authRouter.put('/updateUserPassword', async (req, res) => {
   const { empId, oldPassword, newPassword } = req.body;
+  console.log(req.body); // For debugging purposes, remove in production
 
-  // Input validation
+  // Check if all required fields are provided
   if (!empId || !oldPassword || !newPassword) {
-      return res.status(400).json({
-          success: false,
-          message: 'All fields are1 required'
-      });
+    return res.status(400).json({
+      message: "empId, oldPassword, and newPassword are required",
+    });
   }
 
-  // First check if employee exists and verify old password
-  const checkQuery = 'SELECT * FROM master WHERE emp_id = ? AND emp_password = ?';
-  
-  db.query(checkQuery, [empId, oldPassword], (error, results) => {
-      if (error) {
-          console.error('Error checking employee:', error);
-          return res.status(500).json({
-              success: false,
-              message: 'Database error'
-          });
-      }
+  try {
+    const db = global.dbClient.db('hrmDB'); // Access the database
+    const collection = db.collection('master'); // Access 'master' collection
 
-      if (results.length === 0) {
-          return res.status(401).json({
-              success: false,
-              message: 'Invalid current password'
-          });
-      }
+    // Find the user by emp_id and oldPassword
+    const user = await collection.findOne({ emp_id: empId, emp_password: oldPassword });
 
-      // Update password
-      const updateQuery = 'UPDATE master SET emp_password = ? WHERE emp_id = ?';
-      
-      db.query(updateQuery, [newPassword, empId], (updateError, updateResults) => {
-          if (updateError) {
-              console.error('Error updating password:', updateError);
-              return res.status(500).json({
-                  success: false,
-                  message: 'Error updating password'
-              });
-          }
+    // If user is not found or passwords do not match
+    if (!user) {
+      return res.status(401).json({ message: 'Invalid emp_id or old password' });
+    }
 
-          if (updateResults.affectedRows > 0) {
-              return res.status(200).json({
-                  success: true,
-                  message: 'Password updated successfully'
-              });
-          } else {
-              return res.status(500).json({
-                  success: false,
-                  message: 'Failed to update password'
-              });
-          }
-      });
-  });
+    // Ensure the new password is not the same as the old password
+    if (oldPassword === newPassword) {
+      return res.status(400).json({ message: 'New password cannot be the same as the old password' });
+    }
+
+    // Update password with the new password
+    const updateResult = await collection.updateOne(
+      { emp_id: empId }, // Matching emp_id
+      { $set: { emp_password: newPassword } }
+    );
+
+    // Check if the password was successfully updated
+    if (updateResult.modifiedCount === 0) {
+      return res.status(400).json({ message: 'Failed to update password' });
+    }
+
+    return res.status(200).json({
+      message: 'Password updated successfully',
+      emp_id: empId, // Use empId from the request body
+    });
+  } catch (error) {
+    console.error("MongoDB error: ", error.message);
+    return res.status(500).json({ message: 'Database error', error: error.message });
+  }
 });
+
 
 export default authRouter;

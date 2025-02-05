@@ -1,21 +1,15 @@
-// db.js
-import mysql from 'mysql2';
-
-// MySQL connection setup
-const db = mysql.createConnection({
-  host: 'localhost',
-  user: 'root',
-  password: '',
-  database: 'hrm',
-
-});
-
-db.connect((err) => {
-  if (err) {
-    console.error('Could not connect to MySQL:', err);
-  } else {
-    console.log('Connected to MySQL');
-  }
-});
-
-export default db;  // Export the DB connection
+import { MongoClient } from 'mongodb';
+ 
+export default function MongoDB({ url }) {
+  MongoClient.connect(url, { useNewUrlParser: true, useUnifiedTopology: true })
+    .then((client) => {
+      console.log("MongoDB connection established");
+      global.dbClient = client; // Store client globally
+    })
+    .catch((err) => {
+      console.error("MongoDB error: ", err.message);
+      process.exit(1); // Exit process if connection fails
+    });
+}
+ 
+ 
